@@ -1,0 +1,152 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <DHT.h>
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+#define DHTPIN 4
+#define DHTTYPE DHT11
+#define LED_PIN 2
+DHT dht(DHTPIN, DHTTYPE);
+WebServer server(80);
+bool ledState = false;
+const char webpage[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ESP32 IoT Dashboard</title>
+  <style>
+    body {
+      font-family: Arial;
+      background: #f3f6fa;
+      text-align: center;
+      padding: 20px;
+    }
+    .card {
+      background: white;
+      padding: 22px;
+      margin: 18px auto;
+      max-width: 420px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px #ccc;
+    }
+    button {
+      padding: 12px 22px;
+      margin: 8px;
+      border: none;
+      border-radius: 6px;
+      color: white;
+      cursor: pointer;
+    }
+    .on { background: #16a765; }
+    .off { background: #e65368; }
+    .value { font-size: 25px; color: #1686ad; }
+  </style>
+</head>
+<body>
+  <h2>ESP32 IoT Dashboard</h2>
+
+  <div class="card">
+    <h3>LED Control</h3>
+    <p>Status: <b id="ledStatus">Loading...</b></p>
+    <button class="on" onclick="controlLED('on')">LED ON</button>
+    <button class="off" onclick="controlLED('off')">LED OFF</button>
+  </div>
+
+  <div class="card">
+    <h3>DHT11 Monitoring</h3>
+    <p>Temperature</p>
+    <div class="value"><span id="temp">--</span> °C</div>
+    <p>Humidity</p>
+    <div class="value"><span id="hum">--</span> %</div>
+  </div>
+
+<script>
+async function controlLED(state) {
+  try {
+    await fetch('/led?state=' + state);
+    updateData();
+  } catch (e) {
+    console.log(e);
+  }
+}
+
+async function updateData() {
+  try {
+    const response = await fetch('/data');
+    const data = await response.json();
+
+    document.getElementById('ledStatus').textContent =
+      data.led ? 'ON' : 'OFF';
+
+    document.getElementById('temp').textContent =
+      data.temperature === null ? 'Sensor error' : data.temperature;
+
+    document.getElementById('hum').textContent =
+      data.humidity === null ? 'Sensor error' : data.humidity;
+  } catch (e) {
+    console.log(e);
+  }
+}
+
+updateData();
+setInterval(updateData, 2000);
+</script>
+</body>
+</html>
+)rawliteral";
+
+void handleRoot() {
+  server.send_P(200, "text/html", webpage);
+}
+void handleLED() {
+  if (server.hasArg("state")) {
+    String state = server.arg("state");
+
+    if (state == "on") {
+      ledState = true;
+    } else if (state == "off") {
+      ledState = false;
+    }
+  }
+  digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+  server.send(200, "text/plain", ledState ? "LED ON" : "LED OFF");
+}
+
+void handleData() {
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+  String json = "{";
+  json += "\"led\":";
+  json += (ledState ? "true" : "false");
+  json += ",\"temperature\":";
+  json += (isnan(temperature) ? "null" : String(temperature, 1));
+  json += ",\"humidity\":";
+  json += (isnan(humidity) ? "null" : String(humidity, 1));
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  dht.begin();
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("Dashboard URL: http://");
+  Serial.println(WiFi.localIP());
+  server.on("/", handleRoot);
+  server.on("/led", handleLED);
+  server.on("/data", handleData);
+  server.begin();
+  Serial.println("Web server started");
+}
+void loop() {
+  server.handleClient();
+}
